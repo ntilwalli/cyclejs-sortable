@@ -33,12 +33,26 @@ export const mousemoveHandler: EventHandler = (node, event, options) => {
         return node;
     }
 
-    const mouseOffset: MouseOffset = JSON.parse(ghost.data.attrs[
-        'data-mouseoffset'
-    ] as string);
-    const itemIndex: number = parseInt(ghost.data.attrs[
-        'data-itemindex'
-    ] as string);
+    const data_mouseoffset = ghost.data.attrs['data-mouseoffset'] as string;
+
+    console.log('data_attrs', ghost.data.attrs);
+    if (!Object.keys(ghost.data.attrs).length) {
+        return node;
+    }
+
+    if (!data_mouseoffset) {
+        return node;
+    }
+    //console.log('data_mouseoffset', data_mouseoffset, ghost.data.attrs)
+    const mouseOffset: MouseOffset = JSON.parse(data_mouseoffset);
+
+    const data_itemindex = ghost.data.attrs['data-itemindex'] as string;
+
+    if (!data_itemindex) {
+        return node;
+    }
+
+    const itemIndex: number = parseInt(data_itemindex);
     const item: VNode = parent.children[itemIndex] as VNode;
     const itemIntersection: number = getArea(
         getIntersection(item.elm as Element, ghost.elm as Element)

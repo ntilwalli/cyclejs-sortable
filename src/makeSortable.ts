@@ -1,7 +1,6 @@
 import { Observable as O } from 'rxjs';
 import delay from 'xstream/extra/delay';
 import { DOMSource, VNode } from '@cycle/dom';
-import { adapt } from '@cycle/run/lib/adapt';
 
 import {
     SortableOptions,
@@ -21,6 +20,28 @@ export {
 
 function remember(stream) {
     return stream.publishReplay(1).refCount();
+}
+function multicast(stream) {
+    return stream.publish().refCount();
+}
+
+export function trace(id = '') {
+    return source =>
+        source
+            .startWith(`start`)
+            .map(x => {
+                if (x === `start`) {
+                    console.log(`starting ${id}`);
+                }
+                return x;
+            })
+            .filter(x => x !== `start`)
+            .catch((e, orig$) => {
+                return O.throw(e);
+            })
+            .finally(e => {
+                return console.log(`ending ${id}`, e);
+            });
 }
 
 function augmentEvent(ev: any): MouseEvent {
@@ -74,46 +95,66 @@ export function makeSortable<T>(
                     options || {},
                     node
                 );
-                const down$ = O.merge(
-                    dom.select(defaults.handle).events('mousedown'),
-                    dom
-                        .select(defaults.handle)
-                        .events('touchstart')
-                        .map(augmentEvent)
-                );
-                const up$ = O.merge(
-                    dom.select('body').events('mouseleave'),
-                    dom.select('body').events('mouseup'),
-                    dom.select(defaults.handle).events('touchend')
+                const down$ = multicast(
+                    O.merge(
+                        dom.select(defaults.handle).events('mousedown'),
+                        dom
+                            .select(defaults.handle)
+                            .events('touchstart')
+                            .map(augmentEvent)
+                    )
+                    //.let(trace('down'))
                 );
 
-                const move$ = O.merge(
-                    dom.select('body').events('mousemove'),
-                    dom
-                        .select(defaults.handle)
-                        .events('touchmove')
-                        .map(augmentEvent)
+                const up$ = multicast(
+                    O.merge(
+                        dom.select('body').events('mouseleave'),
+                        dom.select('body').events('mouseup'),
+                        dom.select(defaults.handle).events('touchend')
+                    )
+                    //.let(trace('up'))
                 );
 
-                const mousedown$: O<any> = down$.switchMap(ev =>
-                    O.of(ev)
-                        .delay(defaults.selectionDelay)
-                        .takeUntil(O.merge(up$, move$))
+                const move$ = multicast(
+                    O.merge(
+                        dom.select('body').events('mousemove'),
+                        dom
+                            .select(defaults.handle)
+                            .events('touchmove')
+                            .map(augmentEvent)
+                    )
+                    //.let(trace('move'))
                 );
 
-                const mouseup$: O<any> = mousedown$.switchMap(_ => up$.take(1));
+                const mousedown$: O<any> = multicast(
+                    down$.switchMap(ev =>
+                        O.of(ev)
+                            .delay(defaults.selectionDelay)
+                            .takeUntil(O.merge(up$, move$))
+                    )
+                    //.let(trace('mousedown'))
+                );
 
-                const mousemove$: O<any> = mousedown$.switchMap(start => {
-                    return move$
-                        .map(ev =>
-                            augmentStartDistance(
-                                ev,
-                                start.clientX,
-                                start.clientY
+                const mouseup$: O<any> = multicast(
+                    mousedown$.switchMap(_ => up$.take(1))
+                    //.let(trace('mouseup'))
+                );
+
+                const mousemove$: O<any> = multicast(
+                    mousedown$.switchMap(start => {
+                        return move$
+                            .map(ev =>
+                                augmentStartDistance(
+                                    ev,
+                                    start.clientX,
+                                    start.clientY
+                                )
                             )
-                        )
-                        .takeUntil(mouseup$);
-                });
+                            .takeUntil(mouseup$);
+                        //.let(trace('mousemove'));
+                    })
+                );
+
                 const event$: O<any> = O.merge(
                     mousedown$,
                     mouseup$,
@@ -125,7 +166,8 @@ export function makeSortable<T>(
                     .scan((acc, curr) => handleEvent(acc, curr, defaults));
             })
         );
-        return adapt(out$ as any);
+
+        return out$ as any;
     };
 }
 
