@@ -1,7 +1,7 @@
-import { Stream } from 'xstream';
+import { Observable as O } from 'rxjs';
 import { VNode } from '@cycle/dom';
 
-export type Transform<T, U> = (s: Stream<T>) => Stream<U>;
+export type Transform<T, U> = (s: O<T>) => O<U>;
 export type EventHandler = (
     node: VNode,
     event: MouseEvent,

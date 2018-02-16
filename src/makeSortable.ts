@@ -1,4 +1,4 @@
-import xs, { Stream } from 'xstream';
+import { Observable as O } from 'rxjs';
 import delay from 'xstream/extra/delay';
 import { DOMSource, VNode } from '@cycle/dom';
 import { adapt } from '@cycle/run/lib/adapt';
@@ -18,6 +18,10 @@ export {
     EventHandler,
     EventDetails
 } from './definitions';
+
+function remember(stream) {
+    return stream.publishReplay(1).refCount();
+}
 
 function augmentEvent(ev: any): MouseEvent {
     const touch: any = (ev as any).touches[0];
@@ -59,90 +63,67 @@ export function makeSortable<T>(
     options?: SortableOptions
 ): (s: T) => T {
     return sortable => {
-        const dom$ = (xs.fromObservable(sortable as any) as Stream<
-            VNode
-        >).remember();
+        const dom$ = remember(sortable);
 
         const moreThanOneChild$ = dom$.filter(moreThanOneChild);
         const notMoreThanOneChild$ = dom$.filter(notMoreThanOneChild);
-        const out$ = xs.merge(
+        const out$ = O.merge(
             notMoreThanOneChild$,
-            moreThanOneChild$
-                .map(addKeys)
-                .map(node => {
-                    const defaults: SortableOptions = applyDefaults(
-                        options || {},
-                        node
-                    );
-                    const down$ = xs.merge(
-                        xs.fromObservable(
-                            dom.select(defaults.handle).events('mousedown')
-                        ),
-                        xs
-                            .fromObservable(
-                                dom.select(defaults.handle).events('touchstart')
-                            )
-                            .map(augmentEvent)
-                    );
-                    const up$ = xs.merge(
-                        xs.fromObservable(
-                            dom.select('body').events('mouseleave')
-                        ),
-                        xs.fromObservable(dom.select('body').events('mouseup')),
-                        xs.fromObservable(
-                            dom.select(defaults.handle).events('touchend')
-                        )
-                    );
+            moreThanOneChild$.map(addKeys).switchMap(node => {
+                const defaults: SortableOptions = applyDefaults(
+                    options || {},
+                    node
+                );
+                const down$ = O.merge(
+                    dom.select(defaults.handle).events('mousedown'),
+                    dom
+                        .select(defaults.handle)
+                        .events('touchstart')
+                        .map(augmentEvent)
+                );
+                const up$ = O.merge(
+                    dom.select('body').events('mouseleave'),
+                    dom.select('body').events('mouseup'),
+                    dom.select(defaults.handle).events('touchend')
+                );
 
-                    const move$ = xs.merge(
-                        xs.fromObservable(
-                            dom.select('body').events('mousemove')
-                        ),
-                        xs
-                            .fromObservable(
-                                dom.select(defaults.handle).events('touchmove')
-                            )
-                            .map(augmentEvent)
-                    );
+                const move$ = O.merge(
+                    dom.select('body').events('mousemove'),
+                    dom
+                        .select(defaults.handle)
+                        .events('touchmove')
+                        .map(augmentEvent)
+                );
 
-                    const mousedown$: Stream<MouseEvent> = down$
+                const mousedown$: O<any> = down$.switchMap(ev =>
+                    O.of(ev)
+                        .delay(defaults.selectionDelay)
+                        .takeUntil(O.merge(up$, move$))
+                );
+
+                const mouseup$: O<any> = mousedown$.switchMap(_ => up$.take(1));
+
+                const mousemove$: O<any> = mousedown$.switchMap(start => {
+                    return move$
                         .map(ev =>
-                            xs
-                                .of(ev)
-                                .compose(delay(defaults.selectionDelay))
-                                .endWhen(xs.merge(up$, move$))
+                            augmentStartDistance(
+                                ev,
+                                start.clientX,
+                                start.clientY
+                            )
                         )
-                        .flatten() as Stream<MouseEvent>;
+                        .takeUntil(mouseup$);
+                });
+                const event$: O<any> = O.merge(
+                    mousedown$,
+                    mouseup$,
+                    mousemove$
+                );
 
-                    const mouseup$: Stream<MouseEvent> = mousedown$
-                        .map(_ => up$.take(1))
-                        .flatten() as Stream<MouseEvent>;
-
-                    const mousemove$: Stream<MouseEvent> = mousedown$
-                        .map(start => {
-                            return move$
-                                .map(ev =>
-                                    augmentStartDistance(
-                                        ev,
-                                        start.clientX,
-                                        start.clientY
-                                    )
-                                )
-                                .endWhen(mouseup$);
-                        })
-                        .flatten() as Stream<MouseEvent>;
-                    const event$: Stream<MouseEvent> = xs.merge(
-                        mousedown$,
-                        mouseup$,
-                        mousemove$
-                    );
-
-                    return event$.fold(
-                        (acc, curr) => handleEvent(acc, curr, defaults),
-                        node
-                    );
-                })
-                .flatten()
+                return event$
+                    .startWith(node)
+                    .scan((acc, curr) => handleEvent(acc, curr, defaults));
+            })
         );
         return adapt(out$ as any);
     };
@@ -152,15 +133,13 @@ export function makeSortable<T>(
  * Returns a stream of swapped indices
  * @param {DOMSource} dom a DOMSource containing the sortable
  * @param {string} parentSelector a valid CSS selector for the sortable parent (not the items)
- * @return {Stream<EventDetails>} an object containing the new positions @see EventDetails
+ * @return {O<EventDetails>} an object containing the new positions @see EventDetails
  */
 export function getUpdateEvent(
     dom: DOMSource,
     parentSelector: string
-): Stream<EventDetails> {
-    return adapt((xs.fromObservable(
-        dom.select(parentSelector).events('updateOrder')
-    ) as Stream<any>)
-        .compose(delay(10)) //Allow mouseup to execute properly
-        .map(ev => ev.detail) as any);
+): O<EventDetails> {
+    return (dom.select(parentSelector).events('updateOrder') as any)
+        .delay(10) //Allow mouseup to execute properly
+        .map(ev => ev.detail);
 }
